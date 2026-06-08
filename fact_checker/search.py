@@ -1,114 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import time
-from pathlib import Path
 
 import httpx
 
-from fact_checker.config import FALLBACK_INSTANCES, MergedConfig
+from fact_checker.config import SERPER_API_URL, MergedConfig
 from fact_checker.utils import async_retry
 
 logger = logging.getLogger(__name__)
-
-_INSTANCE_CACHE_FILE = Path("./sessions/.instance_cache.json")
-
-
-# ---------------------------------------------------------------------------
-# Health check
-# ---------------------------------------------------------------------------
-
-
-async def _check_instance_latency(
-    client: httpx.AsyncClient,
-    url: str,
-    timeout: float,
-) -> tuple[str, float] | None:
-    """Return (url, latency_seconds) if the instance is healthy, else None."""
-    endpoints = ["/healthz", "/stats", "/"]
-    for endpoint in endpoints:
-        try:
-            method = "GET" if endpoint in ("/healthz", "/stats") else "HEAD"
-            start = time.monotonic()
-            response = await client.request(
-                method,
-                f"{url.rstrip('/')}{endpoint}",
-                timeout=httpx.Timeout(timeout),
-                follow_redirects=True,
-            )
-            elapsed = time.monotonic() - start
-            if response.status_code < 300:
-                logger.debug("Instance %s healthy via %s (%.2fs)", url, endpoint, elapsed)
-                return url, elapsed
-        except (httpx.HTTPError, httpx.TimeoutException, OSError):
-            continue
-    logger.warning("Instance %s failed all health checks — skipping", url)
-    return None
-
-
-async def _rank_instances(
-    instances: list[str],
-    health_timeout: float,
-) -> list[str]:
-    """Return instances sorted by ascending latency (fastest first)."""
-    async with httpx.AsyncClient() as client:
-        tasks = [_check_instance_latency(client, url, health_timeout) for url in instances]
-        results = await asyncio.gather(*tasks)
-
-    ranked = sorted(
-        (r for r in results if r is not None),
-        key=lambda x: x[1],
-    )
-    return [url for url, _ in ranked]
-
-
-# ---------------------------------------------------------------------------
-# Instance cache
-# ---------------------------------------------------------------------------
-
-
-def _load_cached_instances() -> list[str]:
-    try:
-        data = json.loads(_INSTANCE_CACHE_FILE.read_text(encoding="utf-8"))
-        instances: list[str] = data.get("instances", [])
-        logger.info("Loaded %d instances from cache", len(instances))
-        return instances
-    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
-        logger.warning("Could not load instance cache: %s", exc)
-        return []
-
-
-def _save_cached_instances(instances: list[str]) -> None:
-    try:
-        _INSTANCE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _INSTANCE_CACHE_FILE.write_text(
-            json.dumps({"instances": instances}, indent=2),
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        logger.warning("Could not save instance cache: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Dynamic discovery
-# ---------------------------------------------------------------------------
-
-
-async def _fetch_dynamic_instances(url: str, timeout: float) -> list[str]:
-    """Fetch and parse the live instance list from searx.space."""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=httpx.Timeout(timeout))
-            response.raise_for_status()
-            data = response.json()
-            instances: list[str] = list(data.get("instances", {}).keys())
-            logger.info("Fetched %d instances from %s", len(instances), url)
-            return instances
-    except (httpx.HTTPError, httpx.TimeoutException, OSError, json.JSONDecodeError) as exc:
-        logger.warning("Dynamic instance fetch failed: %s", exc)
-        return []
 
 
 # ---------------------------------------------------------------------------
@@ -117,98 +16,51 @@ async def _fetch_dynamic_instances(url: str, timeout: float) -> list[str]:
 
 
 class SearchClient:
-    """Manages SearXNG instance selection and query execution."""
+    """Executes web searches via the Serper API (Google Search)."""
 
     def __init__(self, config: MergedConfig) -> None:
         self._config = config
-        self._instances: list[str] = []
-        self._current_index: int = 0
 
     async def initialise(self) -> None:
-        """Resolve, health-check, and rank instances. Must be called before search()."""
-        base = list(FALLBACK_INSTANCES)
-
-        if self._config.instances_url:
-            dynamic = await _fetch_dynamic_instances(
-                self._config.instances_url,
-                self._config.searxng_health_timeout,
-            )
-            # Merge: union, deduplicated, preserving order
-            seen: set[str] = set(base)
-            for url in dynamic:
-                if url not in seen:
-                    base.append(url)
-                    seen.add(url)
-
-        logger.info("Running health checks against %d instances...", len(base))
-        ranked = await _rank_instances(base, self._config.searxng_health_timeout)
-
-        if ranked:
-            self._instances = ranked
-            _save_cached_instances(ranked)
-            logger.info("Using %d healthy instance(s); primary: %s", len(ranked), ranked[0])
-        else:
-            logger.warning("All health checks failed — falling back to instance cache")
-            self._instances = _load_cached_instances()
-
-        if not self._instances:
-            logger.error("No usable SearXNG instances available")
-
-    @property
-    def _primary(self) -> str | None:
-        return self._instances[self._current_index] if self._instances else None
-
-    def _rotate(self) -> None:
-        """Advance to the next healthy instance."""
-        if self._instances:
-            self._current_index = (self._current_index + 1) % len(self._instances)
-            logger.warning("Rotating to next instance: %s", self._instances[self._current_index])
+        """No-op for Serper — no instance management needed."""
+        logger.info("SearchClient ready (Serper API)")
 
     @async_retry(max_attempts=3, exceptions=(httpx.HTTPError, httpx.TimeoutException, OSError))
-    async def _do_search(self, instance: str, query: str) -> list[dict[str, str]]:
-        """Execute a single search request against one instance."""
+    async def _do_search(self, query: str) -> list[dict[str, str]]:
+        """Execute a single search request against Serper API."""
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{instance.rstrip('/')}/search",
-                params={"q": query, "format": "json", "language": "en"},
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"},
-                timeout=httpx.Timeout(self._config.searxng_timeout),
-                follow_redirects=True,
+            response = await client.post(
+                SERPER_API_URL,
+                headers={
+                    "X-API-KEY": self._config.serper_api_key,
+                    "Content-Type": "application/json",
+                },
+                json={"q": query, "num": 10},
+                timeout=httpx.Timeout(self._config.serper_timeout),
             )
             response.raise_for_status()
             data = response.json()
-            results: list[dict[str, str]] = data.get("results", [])
-            return results
+
+        results: list[dict[str, str]] = []
+        for item in data.get("organic", []):
+            results.append({
+                "url": item.get("link", ""),
+                "content": item.get("snippet", ""),
+                "title": item.get("title", ""),
+            })
+        return results
 
     async def search(self, query: str) -> list[dict[str, str]]:
-        """Search for query, rotating instances on failure.
+        """Search for query via Serper API.
 
         Returns:
-            List of result dicts with at minimum 'url' and 'content' keys.
-            Returns empty list if all instances fail.
+            List of result dicts with 'url', 'content', and 'title' keys.
+            Returns empty list on failure.
         """
-        if not self._instances:
-            logger.error("search() called but no instances are available")
+        try:
+            results = await self._do_search(query)
+            logger.info("Search '%s' returned %d result(s)", query, len(results))
+            return results
+        except (httpx.HTTPError, httpx.TimeoutException, OSError) as exc:
+            logger.error("Serper search failed for query %r: %s", query, exc)
             return []
-
-        attempts = len(self._instances)
-        for _ in range(attempts):
-            instance = self._primary
-            if instance is None:
-                break
-            try:
-                results = await self._do_search(instance, query)
-                logger.info(
-                    "Search '%s' returned %d result(s) from %s",
-                    query,
-                    len(results),
-                    instance,
-                )
-                return results
-            except (httpx.HTTPError, httpx.TimeoutException, OSError) as exc:
-                logger.warning("Instance %s failed during search: %s", instance, exc)
-                self._rotate()
-
-        logger.error("All instances failed for query: %r", query)
-        return []
-

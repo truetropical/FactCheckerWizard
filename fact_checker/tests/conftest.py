@@ -9,28 +9,17 @@ from fact_checker.config import MergedConfig
 from fact_checker.verifier import VerificationResult
 
 
-# ---------------------------------------------------------------------------
-# Shared config fixture
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def config(tmp_path: Path) -> MergedConfig:
     return MergedConfig(
         groq_api_key="test-groq-key",
         groq_model="llama-3.1-8b-instant",
-        searxng_timeout=15.0,
-        searxng_health_timeout=5.0,
-        searxng_max_retries=3,
+        serper_api_key="test-serper-key",
+        serper_timeout=15.0,
+        serper_max_retries=3,
         sessions_dir=tmp_path / "sessions",
-        instances_url=None,
         log_level="INFO",
     )
-
-
-# ---------------------------------------------------------------------------
-# Shared claim fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -51,14 +40,8 @@ def sample_verification_result(sample_claim: str) -> VerificationResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# Mock Groq response
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def mock_groq_response() -> MagicMock:
-    """A fake httpx.Response simulating a successful Groq API response."""
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {
