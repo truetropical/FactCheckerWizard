@@ -7,12 +7,8 @@ import sys
 
 from fact_checker.agent import Agent
 from fact_checker.config import ConfigError, load_config
+from fact_checker.persistence import render_console_report
 from fact_checker.verifier import VerificationResult
-
-
-# ---------------------------------------------------------------------------
-# Output formatters
-# ---------------------------------------------------------------------------
 
 
 def _result_to_stdout_dict(r: VerificationResult) -> dict[str, object]:
@@ -27,15 +23,10 @@ def _result_to_stdout_dict(r: VerificationResult) -> dict[str, object]:
     }
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fact-checker",
-        description="Verify factual claims using SearXNG + Gemini grounding.",
+        description="Verify factual claims using Serper + Groq.",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -50,10 +41,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        choices=["json", "file"],
-        default="json",
+        choices=["json", "report", "file"],
+        default="report",
         help=(
-            "json: print structured JSON to stdout (default). "
+            "report: print a human-readable text report to stdout (default). "
+            "json: print structured JSON to stdout. "
             "file: print only the session directory path to stdout."
         ),
     )
@@ -82,13 +74,14 @@ async def _async_main(args: argparse.Namespace) -> None:
     agent = Agent(config)
     results = await agent.run(text)
 
-    if args.output == "file":
-        # session_dir already printed to stderr by agent; derive from results
-        # The session path was already emitted to stderr — nothing extra needed.
-        pass
-    else:
-        payload = [_result_to_stdout_dict(r) for r in results]
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    match args.output:
+        case "report":
+            print(render_console_report(results))
+        case "json":
+            payload = [_result_to_stdout_dict(r) for r in results]
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        case "file":
+            pass  # session path already printed to stderr by agent
 
 
 def main() -> None:
@@ -100,7 +93,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
-    except Exception as exc:  # outermost boundary — user-friendly message only
+    except Exception as exc:
         print(f"Unexpected error: {exc}", file=sys.stderr)
         sys.exit(1)
 
