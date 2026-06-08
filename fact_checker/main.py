@@ -7,6 +7,7 @@ import sys
 
 from fact_checker.agent import Agent
 from fact_checker.config import ConfigError, load_config
+from fact_checker.fetcher import FetchError, fetch_url_text
 from fact_checker.persistence import render_console_report
 from fact_checker.verifier import VerificationResult
 
@@ -39,6 +40,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Path to a plain-text file whose contents will be verified.",
     )
+    group.add_argument(
+        "--url",
+        metavar="URL",
+        help="URL of a web page or post to fetch and fact-check.",
+    )
     parser.add_argument(
         "--output",
         choices=["json", "report", "file"],
@@ -52,9 +58,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_text(args: argparse.Namespace) -> str:
+async def _load_text(args: argparse.Namespace) -> str:
     if args.claim:
         return str(args.claim)
+    if args.url:
+        print(f"Fetching URL: {args.url}", file=sys.stderr, flush=True)
+        try:
+            return await fetch_url_text(args.url)
+        except FetchError as exc:
+            print(f"Error fetching URL: {exc}", file=sys.stderr)
+            sys.exit(1)
     try:
         with open(args.file, encoding="utf-8") as fh:
             return fh.read()
@@ -70,7 +83,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         print(f"Configuration error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    text = _load_text(args)
+    text = await _load_text(args)
     agent = Agent(config)
     results = await agent.run(text)
 
@@ -81,7 +94,7 @@ async def _async_main(args: argparse.Namespace) -> None:
             payload = [_result_to_stdout_dict(r) for r in results]
             print(json.dumps(payload, indent=2, ensure_ascii=False))
         case "file":
-            pass  # session path already printed to stderr by agent
+            pass
 
 
 def main() -> None:
