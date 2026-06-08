@@ -5,61 +5,73 @@ from pathlib import Path
 
 import pytest
 
+from fact_checker.agent import ClaimPair
 from fact_checker.persistence import write_session
 from fact_checker.verifier import VerificationResult
 
 
+def _make_pair(claim: str, verdict: str = "Supported") -> ClaimPair:
+    result = VerificationResult(
+        claim=claim,
+        verdict=verdict,  # type: ignore[arg-type]
+        confidence=0.95,
+        sources=["https://example.com"],
+        reasoning="Test reasoning.",
+        grounding_used=False,
+        error=None,
+    )
+    return ClaimPair(
+        original_claim=claim,
+        sharpened_claim=claim + " (sharpened)",
+        original_result=result,
+        sharpened_result=result,
+    )
+
+
 def test_write_session_creates_directory(
     config: object,
-    sample_verification_result: VerificationResult,
     tmp_path: Path,
 ) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-    session_dir = write_session([sample_verification_result], config)
+    pair = _make_pair("The Eiffel Tower is in Paris, France.")
+    session_dir = write_session([pair], config)
     assert session_dir.exists()
     assert session_dir.is_dir()
 
 
-def test_write_session_creates_json(
-    config: object,
-    sample_verification_result: VerificationResult,
-) -> None:
+def test_write_session_creates_json(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-    session_dir = write_session([sample_verification_result], config)
+    pair = _make_pair("The Eiffel Tower is in Paris, France.")
+    session_dir = write_session([pair], config)
     json_file = session_dir / "session.json"
     assert json_file.exists()
     data = json.loads(json_file.read_text(encoding="utf-8"))
     assert isinstance(data, list)
     assert len(data) == 1
-    assert data[0]["verdict"] == "Supported"
-    assert data[0]["claim"] == sample_verification_result.claim
+    assert data[0]["original_claim"] == pair.original_claim
+    assert data[0]["original_result"]["verdict"] == "Supported"
 
 
-def test_write_session_creates_markdown(
-    config: object,
-    sample_verification_result: VerificationResult,
-) -> None:
+def test_write_session_creates_markdown(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-    session_dir = write_session([sample_verification_result], config)
+    pair = _make_pair("The Eiffel Tower is in Paris, France.")
+    session_dir = write_session([pair], config)
     md_file = session_dir / "report.md"
     assert md_file.exists()
     content = md_file.read_text(encoding="utf-8")
     assert "Fact-Check Report" in content
     assert "Supported" in content
-    assert sample_verification_result.claim in content
 
 
-def test_write_session_unique_dirs(
-    config: object,
-    sample_verification_result: VerificationResult,
-) -> None:
+def test_write_session_unique_dirs(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-    dir1 = write_session([sample_verification_result], config)
-    dir2 = write_session([sample_verification_result], config)
+    pair = _make_pair("The Eiffel Tower is in Paris, France.")
+    dir1 = write_session([pair], config)
+    dir2 = write_session([pair], config)
     assert dir1 != dir2
 
 

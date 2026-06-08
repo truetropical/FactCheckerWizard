@@ -2,29 +2,40 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from fact_checker.config import MergedConfig
 from fact_checker.extractor import extract_claims
 from fact_checker.persistence import write_session
 from fact_checker.search import SearchClient
+from fact_checker.sharpener import sharpen_claim
 from fact_checker.verifier import VerificationResult, Verifier
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Evidence gathering
-# ---------------------------------------------------------------------------
-
 _EVIDENCE_RESULTS_PER_CLAIM: int = 5
 
 
-def _extract_evidence(results: list[dict[str, str]]) -> list[str]:
-    """Pull URL and snippet text out of raw SearXNG result dicts.
+# ---------------------------------------------------------------------------
+# ClaimPair
+# ---------------------------------------------------------------------------
 
-    Returns a flat list interleaving URLs and content snippets so the
-    verifier prompt has both provenance and substance.
-    """
+
+@dataclass
+class ClaimPair:
+    original_claim: str
+    sharpened_claim: str
+    original_result: VerificationResult
+    sharpened_result: VerificationResult
+
+
+# ---------------------------------------------------------------------------
+# Evidence extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_evidence(results: list[dict[str, str]]) -> list[str]:
     evidence: list[str] = []
     for r in results[:_EVIDENCE_RESULTS_PER_CLAIM]:
         url = r.get("url", "").strip()
@@ -49,22 +60,18 @@ class Agent:
         self._search = SearchClient(config)
         self._verifier = Verifier(config)
 
-    async def run(self, text: str) -> list[VerificationResult]:
-        """Run the full pipeline: extract → search → verify → persist.
-
-        Progress messages are streamed to stderr in real time.
+    async def run(self, text: str) -> list[ClaimPair]:
+        """Run the full pipeline: extract, sharpen, search, verify, persist.
 
         Args:
             text: Raw input text containing one or more factual claims.
 
         Returns:
-            List of VerificationResult objects, one per extracted claim.
+            List of ClaimPair objects, one per extracted claim.
         """
-        # --- Stage 1: initialise search ---
-        print("Initialising search instances...", file=sys.stderr, flush=True)
+        print("Initialising search...", file=sys.stderr, flush=True)
         await self._search.initialise()
 
-        # --- Stage 2: extract claims ---
         print("Extracting claims...", file=sys.stderr, flush=True)
         claims = extract_claims(text)
 
@@ -74,32 +81,57 @@ class Agent:
 
         print(f"Found {len(claims)} claim(s) to verify.", file=sys.stderr, flush=True)
 
-        # --- Stage 3: search + verify each claim ---
-        results: list[VerificationResult] = []
+        pairs: list[ClaimPair] = []
 
         for i, claim in enumerate(claims, start=1):
             print(
-                f"Verifying claim {i} of {len(claims)}: {claim[:80]}...",
-                file=sys.stderr,
-                flush=True,
+                f"\nClaim {i} of {len(claims)}: {claim[:80]}...",
+                file=sys.stderr, flush=True,
             )
 
-            search_results = await self._search.search(claim)
-            evidence = _extract_evidence(search_results)
+            # Sharpen
+            print("  Sharpening claim...", file=sys.stderr, flush=True)
+            sharpened = sharpen_claim(claim, self._config)
+            if sharpened != claim:
+                print(f"  Sharpened: {sharpened[:80]}", file=sys.stderr, flush=True)
+            else:
+                print("  Claim unchanged (already precise or unfalsifiable).",
+                      file=sys.stderr, flush=True)
 
-            result = self._verifier.verify_claim(claim, evidence)
-            results.append(result)
-
-            verdict_line = (
-                f"  → {result.verdict} "
-                f"(confidence: {result.confidence:.0%}, "
-                f"grounding: {'yes' if result.grounding_used else 'no'})"
+            # Search + verify original
+            print("  Verifying original...", file=sys.stderr, flush=True)
+            orig_results = await self._search.search(claim)
+            orig_evidence = _extract_evidence(orig_results)
+            original_result = self._verifier.verify_claim(claim, orig_evidence)
+            print(
+                f"  Original  : {original_result.verdict} "
+                f"({original_result.confidence:.0%})",
+                file=sys.stderr, flush=True,
             )
-            print(verdict_line, file=sys.stderr, flush=True)
 
-        # --- Stage 4: persist ---
-        print("Writing session report...", file=sys.stderr, flush=True)
-        session_dir: Path = write_session(results, self._config)
+            # Search + verify sharpened
+            print("  Verifying sharpened...", file=sys.stderr, flush=True)
+            if sharpened != claim:
+                sharp_results = await self._search.search(sharpened)
+                sharp_evidence = _extract_evidence(sharp_results)
+            else:
+                sharp_evidence = orig_evidence
+            sharpened_result = self._verifier.verify_claim(sharpened, sharp_evidence)
+            print(
+                f"  Sharpened : {sharpened_result.verdict} "
+                f"({sharpened_result.confidence:.0%})",
+                file=sys.stderr, flush=True,
+            )
+
+            pairs.append(ClaimPair(
+                original_claim=claim,
+                sharpened_claim=sharpened,
+                original_result=original_result,
+                sharpened_result=sharpened_result,
+            ))
+
+        print("\nWriting session report...", file=sys.stderr, flush=True)
+        session_dir: Path = write_session(pairs, self._config)
         print(f"Session saved: {session_dir}", file=sys.stderr, flush=True)
 
-        return results
+        return pairs

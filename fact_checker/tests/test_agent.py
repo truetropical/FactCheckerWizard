@@ -4,13 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fact_checker.agent import Agent, _extract_evidence
+from fact_checker.agent import Agent, ClaimPair, _extract_evidence
 from fact_checker.verifier import VerificationResult
-
-
-# ---------------------------------------------------------------------------
-# _extract_evidence unit tests
-# ---------------------------------------------------------------------------
 
 
 def test_extract_evidence_pulls_url_and_content() -> None:
@@ -29,17 +24,11 @@ def test_extract_evidence_skips_empty_fields() -> None:
 def test_extract_evidence_caps_at_five() -> None:
     results = [{"url": f"https://example.com/{i}", "content": f"Snippet {i}."} for i in range(10)]
     evidence = _extract_evidence(results)
-    # 5 results * 2 fields each = max 10 items
     assert len(evidence) <= 10
 
 
-# ---------------------------------------------------------------------------
-# Agent.run integration tests (fully mocked)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_agent_run_returns_results(config: object) -> None:
+async def test_agent_run_returns_pairs(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
 
@@ -49,13 +38,14 @@ async def test_agent_run_returns_results(config: object) -> None:
         confidence=0.99,
         sources=["https://nasa.gov"],
         reasoning="Well established astronomical fact.",
-        grounding_used=True,
+        grounding_used=False,
         error=None,
     )
 
     with (
         patch("fact_checker.agent.SearchClient") as mock_search_cls,
         patch("fact_checker.agent.Verifier") as mock_verifier_cls,
+        patch("fact_checker.agent.sharpen_claim", return_value="The Earth orbits the Sun."),
         patch("fact_checker.agent.write_session") as mock_write,
     ):
         mock_search = AsyncMock()
@@ -72,10 +62,11 @@ async def test_agent_run_returns_results(config: object) -> None:
         mock_write.return_value = config.sessions_dir / "20250608_120000_000000"
 
         agent = Agent(config)
-        results = await agent.run("The Earth orbits the Sun.")
+        pairs = await agent.run("The Earth orbits the Sun.")
 
-    assert len(results) == 1
-    assert results[0].verdict == "Supported"
+    assert len(pairs) == 1
+    assert isinstance(pairs[0], ClaimPair)
+    assert pairs[0].original_result.verdict == "Supported"
 
 
 @pytest.mark.asyncio
@@ -86,6 +77,7 @@ async def test_agent_run_empty_text_returns_empty(config: object) -> None:
     with (
         patch("fact_checker.agent.SearchClient") as mock_search_cls,
         patch("fact_checker.agent.Verifier"),
+        patch("fact_checker.agent.sharpen_claim", return_value=""),
         patch("fact_checker.agent.write_session"),
     ):
         mock_search = AsyncMock()
@@ -93,6 +85,6 @@ async def test_agent_run_empty_text_returns_empty(config: object) -> None:
         mock_search_cls.return_value = mock_search
 
         agent = Agent(config)
-        results = await agent.run("")
+        pairs = await agent.run("")
 
-    assert results == []
+    assert pairs == []

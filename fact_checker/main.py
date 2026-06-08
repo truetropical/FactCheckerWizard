@@ -5,22 +5,24 @@ import asyncio
 import json
 import sys
 
-from fact_checker.agent import Agent
+from fact_checker.agent import Agent, ClaimPair
 from fact_checker.config import ConfigError, load_config
 from fact_checker.fetcher import FetchError, fetch_url_text
 from fact_checker.persistence import render_console_report
-from fact_checker.verifier import VerificationResult
 
 
-def _result_to_stdout_dict(r: VerificationResult) -> dict[str, object]:
+def _pair_to_dict(p: ClaimPair) -> dict[str, object]:
     return {
-        "claim": r.claim,
-        "verdict": r.verdict,
-        "confidence": r.confidence,
-        "grounding_used": r.grounding_used,
-        "sources": r.sources,
-        "reasoning": r.reasoning,
-        "error": r.error,
+        "original_claim": p.original_claim,
+        "sharpened_claim": p.sharpened_claim,
+        "original_verdict": p.original_result.verdict,
+        "original_confidence": p.original_result.confidence,
+        "original_reasoning": p.original_result.reasoning,
+        "original_sources": p.original_result.sources,
+        "sharpened_verdict": p.sharpened_result.verdict,
+        "sharpened_confidence": p.sharpened_result.confidence,
+        "sharpened_reasoning": p.sharpened_result.reasoning,
+        "sharpened_sources": p.sharpened_result.sources,
     }
 
 
@@ -30,30 +32,15 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Verify factual claims using Serper + Groq.",
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--claim",
-        metavar="TEXT",
-        help="One or more sentences containing claims to verify.",
-    )
-    group.add_argument(
-        "--file",
-        metavar="PATH",
-        help="Path to a plain-text file whose contents will be verified.",
-    )
-    group.add_argument(
-        "--url",
-        metavar="URL",
-        help="URL of a web page or post to fetch and fact-check.",
-    )
+    group.add_argument("--claim", metavar="TEXT",
+                       help="One or more sentences containing claims to verify.")
+    group.add_argument("--file", metavar="PATH",
+                       help="Path to a plain-text file whose contents will be verified.")
+    group.add_argument("--url", metavar="URL",
+                       help="URL of a web page or post to fetch and fact-check.")
     parser.add_argument(
-        "--output",
-        choices=["json", "report", "file"],
-        default="report",
-        help=(
-            "report: print a human-readable text report to stdout (default). "
-            "json: print structured JSON to stdout. "
-            "file: print only the session directory path to stdout."
-        ),
+        "--output", choices=["json", "report", "file"], default="report",
+        help="report: human-readable (default). json: structured JSON. file: session path only.",
     )
     return parser
 
@@ -85,14 +72,14 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     text = await _load_text(args)
     agent = Agent(config)
-    results = await agent.run(text)
+    pairs = await agent.run(text)
 
     match args.output:
         case "report":
-            print(render_console_report(results))
+            print(render_console_report(pairs))
         case "json":
-            payload = [_result_to_stdout_dict(r) for r in results]
-            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            print(json.dumps([_pair_to_dict(p) for p in pairs], indent=2,
+                             ensure_ascii=False))
         case "file":
             pass
 
@@ -100,7 +87,6 @@ async def _async_main(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
-
     try:
         asyncio.run(_async_main(args))
     except KeyboardInterrupt:
