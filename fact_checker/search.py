@@ -171,6 +171,7 @@ class SearchClient:
             response = await client.get(
                 f"{instance.rstrip('/')}/search",
                 params={"q": query, "format": "json", "language": "en"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"},
                 timeout=httpx.Timeout(self._config.searxng_timeout),
                 follow_redirects=True,
             )
@@ -210,3 +211,4 @@ class SearchClient:
 
         logger.error("All instances failed for query: %r", query)
         return []
+

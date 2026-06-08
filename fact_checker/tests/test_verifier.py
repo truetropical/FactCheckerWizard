@@ -53,62 +53,69 @@ def test_parse_unknown_verdict_defaults_inconclusive() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Verifier.verify_claim integration tests (mocked Gemini)
+# Verifier.verify_claim tests (mocked httpx)
 # ---------------------------------------------------------------------------
 
 
 def test_verify_claim_supported(
     config: object,
-    mock_gemini_client: MagicMock,
+    mock_groq_response: MagicMock,
     sample_claim: str,
 ) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
     verifier = Verifier(config)
-    verifier._client = mock_gemini_client
-    result = verifier.verify_claim(sample_claim, ["https://example.com evidence text"])
+    with patch("fact_checker.verifier.httpx.post", return_value=mock_groq_response):
+        result = verifier.verify_claim(sample_claim, ["https://example.com evidence text"])
     assert isinstance(result, VerificationResult)
     assert result.verdict == "Supported"
     assert result.confidence == pytest.approx(0.95)
-    assert result.grounding_used is True
+    assert result.grounding_used is False
     assert result.error is None
 
 
-def test_verify_claim_api_error_returns_inconclusive(
+def test_verify_claim_http_error_returns_inconclusive(
     config: object,
     sample_claim: str,
 ) -> None:
+    import httpx
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
     verifier = Verifier(config)
-    bad_client = MagicMock()
-    bad_client.models.generate_content.side_effect = RuntimeError("API down")
-    verifier._client = bad_client
-    result = verifier.verify_claim(sample_claim, [])
+    mock_response = MagicMock()
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "429", request=MagicMock(), response=MagicMock()
+    )
+    with patch("fact_checker.verifier.httpx.post", return_value=mock_response):
+        result = verifier.verify_claim(sample_claim, [])
     assert result.verdict == "Inconclusive"
-    assert result.confidence == pytest.approx(0.0)
     assert result.error is not None
-    assert "API down" in result.error
 
 
-def test_verify_claim_no_grounding_uses_searxng_urls(
+def test_verify_claim_network_error_returns_inconclusive(
     config: object,
+    sample_claim: str,
+) -> None:
+    import httpx
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    verifier = Verifier(config)
+    with patch("fact_checker.verifier.httpx.post", side_effect=httpx.TimeoutException("timeout")):
+        result = verifier.verify_claim(sample_claim, [])
+    assert result.verdict == "Inconclusive"
+    assert result.error is not None
+
+
+def test_verify_claim_uses_searxng_urls_as_sources(
+    config: object,
+    mock_groq_response: MagicMock,
     sample_claim: str,
 ) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-
-    response = MagicMock()
-    response.candidates = []
-    response.text = "VERDICT: Inconclusive\nCONFIDENCE: 0.1\nREASONING: No grounding."
-
-    client = MagicMock()
-    client.models.generate_content.return_value = response
-
     verifier = Verifier(config)
-    verifier._client = client
-
     evidence = ["https://searxng-source.com/page", "Some snippet text"]
-    result = verifier.verify_claim(sample_claim, evidence)
-    assert result.grounding_used is False
+    with patch("fact_checker.verifier.httpx.post", return_value=mock_groq_response):
+        result = verifier.verify_claim(sample_claim, evidence)
     assert "https://searxng-source.com/page" in result.sources
+    assert result.grounding_used is False

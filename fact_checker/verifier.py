@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
-from google import genai
-from google.genai import types
+import httpx
 
-from fact_checker.config import MergedConfig
+from fact_checker.config import GROQ_API_URL, MergedConfig
 
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Result schema
@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 class VerificationResult:
     claim: str
     verdict: Literal["Supported", "Refuted", "Inconclusive"]
-    confidence: float          # 0.0–1.0; 0.0 if evidence is absent or contradictory
-    sources: list[str]         # Gemini grounding citations if available, else SearXNG URLs
+    confidence: float          # 0.0-1.0; 0.0 if evidence is absent or contradictory
+    sources: list[str]         # SearXNG-derived URLs
     reasoning: str             # Human-readable explanation, objective tone
-    grounding_used: bool       # True if groundingMetadata was present and used
+    grounding_used: bool       # Always False for Groq (no grounding API)
     error: str | None = None   # Non-None if verification failed due to an exception
 
 
@@ -57,7 +57,7 @@ def _build_prompt(claim: str, evidence: list[str]) -> str:
     return (
         f"Claim to verify:\n{claim}\n\n"
         f"Evidence snippets:\n{evidence_block}\n\n"
-        "Evaluate the claim using the evidence above and your grounded search results."
+        "Evaluate the claim using the evidence above."
     )
 
 
@@ -69,7 +69,7 @@ def _build_prompt(claim: str, evidence: list[str]) -> str:
 def _parse_response(
     raw: str,
 ) -> tuple[Literal["Supported", "Refuted", "Inconclusive"], float, str]:
-    """Parse the structured text response from Gemini into (verdict, confidence, reasoning)."""
+    """Parse the structured text response into (verdict, confidence, reasoning)."""
     verdict: Literal["Supported", "Refuted", "Inconclusive"] = "Inconclusive"
     confidence: float = 0.0
     reasoning: str = raw.strip()
@@ -98,11 +98,10 @@ def _parse_response(
 
 
 class Verifier:
-    """Verifies claims using Gemini with optional Google Search grounding."""
+    """Verifies claims using Groq's API with llama-3.1-8b-instant."""
 
     def __init__(self, config: MergedConfig) -> None:
         self._config = config
-        self._client = genai.Client(api_key=config.gemini_api_key)
 
     def verify_claim(self, claim: str, evidence: list[str]) -> VerificationResult:
         """Verify a single claim against provided evidence snippets.
@@ -115,68 +114,74 @@ class Verifier:
             A VerificationResult. Never raises — errors are captured in .error.
         """
         prompt = _build_prompt(claim, evidence)
+        sources = [e for e in evidence if e.startswith("http")]
 
         try:
-            response = self._client.models.generate_content(
-                model=self._config.gemini_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=_SYSTEM_PROMPT,
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    temperature=0.0,
-                ),
+            response = httpx.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self._config.groq_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._config.groq_model,
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 512,
+                },
+                timeout=httpx.Timeout(30.0),
             )
-        except Exception as exc:  # outermost catch — never let a Gemini error crash the pipeline
-            logger.error("Gemini API call failed for claim %r: %s", claim, exc)
-            return VerificationResult(
-                claim=claim,
-                verdict="Inconclusive",
-                confidence=0.0,
-                sources=[],
-                reasoning="Verification could not be completed due to an API error.",
-                grounding_used=False,
-                error=str(exc),
-            )
-
-        # Extract grounding metadata
-        grounding_used = False
-        sources: list[str] = []
-
-        try:
-            metadata = response.candidates[0].grounding_metadata
-            if metadata and metadata.grounding_chunks:
-                grounding_used = True
-                for chunk in metadata.grounding_chunks:
-                    if chunk.web and chunk.web.uri:
-                        sources.append(chunk.web.uri)
-        except (AttributeError, IndexError):
-            metadata = None
-
-        if not grounding_used:
-            logger.warning(
-                "[WARN] Grounding metadata absent — key may be free-tier or feature disabled"
-            )
-
-        # Fall back to SearXNG-derived evidence URLs if grounding not available
-        if not sources:
-            sources = [e for e in evidence if e.startswith("http")]
-
-        # Parse the text response
-        raw_text = ""
-        try:
-            raw_text = response.text or ""
-        except (AttributeError, ValueError):
-            pass
-
-        if not raw_text:
-            logger.error("Empty response text from Gemini for claim: %r", claim)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error("Groq API HTTP error for claim %r: %s", claim, exc)
             return VerificationResult(
                 claim=claim,
                 verdict="Inconclusive",
                 confidence=0.0,
                 sources=sources,
-                reasoning="Gemini returned an empty response.",
-                grounding_used=grounding_used,
+                reasoning="Verification could not be completed due to an API error.",
+                grounding_used=False,
+                error=str(exc),
+            )
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            logger.error("Groq API request failed for claim %r: %s", claim, exc)
+            return VerificationResult(
+                claim=claim,
+                verdict="Inconclusive",
+                confidence=0.0,
+                sources=sources,
+                reasoning="Verification could not be completed due to a network error.",
+                grounding_used=False,
+                error=str(exc),
+            )
+
+        try:
+            data = response.json()
+            raw_text: str = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError) as exc:
+            logger.error("Failed to parse Groq response for claim %r: %s", claim, exc)
+            return VerificationResult(
+                claim=claim,
+                verdict="Inconclusive",
+                confidence=0.0,
+                sources=sources,
+                reasoning="Groq returned an unparseable response.",
+                grounding_used=False,
+                error=str(exc),
+            )
+
+        if not raw_text:
+            logger.error("Empty response text from Groq for claim: %r", claim)
+            return VerificationResult(
+                claim=claim,
+                verdict="Inconclusive",
+                confidence=0.0,
+                sources=sources,
+                reasoning="Groq returned an empty response.",
+                grounding_used=False,
                 error="Empty response from model",
             )
 
@@ -188,6 +193,6 @@ class Verifier:
             confidence=confidence,
             sources=sources,
             reasoning=reasoning,
-            grounding_used=grounding_used,
+            grounding_used=False,
             error=None,
         )

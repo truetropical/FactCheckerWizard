@@ -17,8 +17,8 @@ from fact_checker.verifier import VerificationResult
 @pytest.fixture
 def config(tmp_path: Path) -> MergedConfig:
     return MergedConfig(
-        gemini_api_key="test-key",
-        gemini_model="gemini-2.0-flash",
+        groq_api_key="test-groq-key",
+        groq_model="llama-3.1-8b-instant",
         searxng_timeout=15.0,
         searxng_health_timeout=5.0,
         searxng_max_retries=3,
@@ -46,41 +46,33 @@ def sample_verification_result(sample_claim: str) -> VerificationResult:
         confidence=0.95,
         sources=["https://example.com/eiffel"],
         reasoning="Multiple sources confirm the Eiffel Tower is in Paris.",
-        grounding_used=True,
+        grounding_used=False,
         error=None,
     )
 
 
 # ---------------------------------------------------------------------------
-# Mock Gemini client
+# Mock Groq response
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def mock_gemini_response() -> MagicMock:
-    """A fake Gemini response with grounding metadata and structured text."""
-    chunk = MagicMock()
-    chunk.web.uri = "https://example.com/source"
-
-    metadata = MagicMock()
-    metadata.grounding_chunks = [chunk]
-
-    candidate = MagicMock()
-    candidate.grounding_metadata = metadata
-
+def mock_groq_response() -> MagicMock:
+    """A fake httpx.Response simulating a successful Groq API response."""
     response = MagicMock()
-    response.candidates = [candidate]
-    response.text = (
-        "VERDICT: Supported\n"
-        "CONFIDENCE: 0.95\n"
-        "REASONING: Evidence confirms the claim.\n"
-    )
+    response.status_code = 200
+    response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": (
+                        "VERDICT: Supported\n"
+                        "CONFIDENCE: 0.95\n"
+                        "REASONING: Evidence confirms the claim.\n"
+                    )
+                }
+            }
+        ]
+    }
+    response.raise_for_status = MagicMock()
     return response
-
-
-@pytest.fixture
-def mock_gemini_client(mock_gemini_response: MagicMock) -> MagicMock:
-    """A fake genai.Client whose models.generate_content returns mock_gemini_response."""
-    client = MagicMock()
-    client.models.generate_content.return_value = mock_gemini_response
-    return client

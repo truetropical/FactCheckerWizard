@@ -31,8 +31,9 @@ FALLBACK_INSTANCES: list[str] = [
 SEARXNG_TIMEOUT_DEFAULT: float = 15.0
 SEARXNG_HEALTH_TIMEOUT_DEFAULT: float = 5.0
 SEARXNG_MAX_RETRIES_DEFAULT: int = 3
-GEMINI_MODEL_DEFAULT: str = "gemini-2.0-flash"
+GROQ_MODEL_DEFAULT: str = "llama-3.1-8b-instant"
 LOG_LEVEL_DEFAULT: str = "INFO"
+GROQ_API_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +52,8 @@ class ConfigError(Exception):
 
 @dataclass
 class MergedConfig:
-    gemini_api_key: str
-    gemini_model: str
+    groq_api_key: str
+    groq_model: str
     searxng_timeout: float
     searxng_health_timeout: float
     searxng_max_retries: int
@@ -98,9 +99,8 @@ def load_config() -> MergedConfig:
     Raises ConfigError if any required key is absent or any value fails
     type validation. Called once at CLI startup.
     """
-    gemini_api_key = _require_env("GEMINI_API_KEY")
-
-    gemini_model = os.environ.get("GEMINI_MODEL", GEMINI_MODEL_DEFAULT)
+    groq_api_key = _require_env("GROQ_API_KEY")
+    groq_model = os.environ.get("GROQ_MODEL", GROQ_MODEL_DEFAULT)
 
     raw_timeout = os.environ.get("SEARXNG_TIMEOUT")
     searxng_timeout = (
@@ -124,7 +124,6 @@ def load_config() -> MergedConfig:
     )
 
     sessions_dir = Path(os.environ.get("SESSIONS_DIR", "./sessions"))
-
     instances_url: str | None = os.environ.get("SEARXNG_INSTANCES_URL") or None
 
     log_level_raw = os.environ.get("LOG_LEVEL", LOG_LEVEL_DEFAULT).upper()
@@ -137,8 +136,8 @@ def load_config() -> MergedConfig:
     logging.basicConfig(level=getattr(logging, log_level_raw))
 
     return MergedConfig(
-        gemini_api_key=gemini_api_key,
-        gemini_model=gemini_model,
+        groq_api_key=groq_api_key,
+        groq_model=groq_model,
         searxng_timeout=searxng_timeout,
         searxng_health_timeout=searxng_health_timeout,
         searxng_max_retries=searxng_max_retries,
