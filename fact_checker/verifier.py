@@ -146,7 +146,7 @@ def _parse_response(
     for line in raw.splitlines():
         line = line.strip()
         if line.startswith("VERDICT:"):
-            raw_verdict = line.split(":", 1)[1].strip()
+            raw_verdict = line.split(":", 1)[1].strip().capitalize()
             if raw_verdict in {"Supported", "Refuted", "Inconclusive"}:
                 verdict = raw_verdict  # type: ignore[assignment]
         elif line.startswith("CONFIDENCE:"):

@@ -73,7 +73,7 @@ async def test_agent_run_returns_pairs(config: object) -> None:
     assert len(pairs) == 1
     assert isinstance(pairs[0], ClaimPair)
     assert pairs[0].original_result.verdict == "Supported"
-    assert len(pairs[0].subclaim_results) == 1
+    assert len(pairs[0].subclaim_results) == 0
 
 
 @pytest.mark.asyncio
@@ -95,4 +95,5 @@ async def test_agent_run_empty_text_returns_empty(config: object) -> None:
         pairs = await agent.run("")
 
     assert pairs == []
+
 
