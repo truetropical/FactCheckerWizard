@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fact_checker.sharpener import sharpen_claim
+from fact_checker.sharpener import normalize_claim, decompose_claim, process_claim
 
 
 def _mock_response(content: str) -> MagicMock:
@@ -16,56 +16,78 @@ def _mock_response(content: str) -> MagicMock:
     return response
 
 
-def test_sharpen_returns_list(config: object) -> None:
+def test_normalize_returns_string(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-    mock_resp = _mock_response('["Donald Trump has been convicted of a sexual offense."]')
+    mock_resp = _mock_response("Donald Trump has engaged in sexual conduct with a minor.")
     with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
-        result = sharpen_claim("Trump is a pedophile.", config)
-    assert isinstance(result, list)
-    assert len(result) == 1
+        result = normalize_claim("Trump is a pedophile.", config)
+    assert isinstance(result, str)
+    assert len(result) > 0
 
 
-def test_sharpen_returns_multiple_subclaims(config: object) -> None:
-    from fact_checker.config import MergedConfig
-    assert isinstance(config, MergedConfig)
-    mock_resp = _mock_response('["Subclaim A.", "Subclaim B.", "Subclaim C."]')
-    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
-        result = sharpen_claim("X is corrupt.", config)
-    assert len(result) == 3
-
-
-def test_sharpen_caps_at_three(config: object) -> None:
-    from fact_checker.config import MergedConfig
-    assert isinstance(config, MergedConfig)
-    mock_resp = _mock_response('["A.", "B.", "C.", "D.", "E."]')
-    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
-        result = sharpen_claim("Something.", config)
-    assert len(result) <= 3
-
-
-def test_sharpen_falls_back_on_empty_response(config: object) -> None:
+def test_normalize_falls_back_on_empty(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
     mock_resp = _mock_response("")
     with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
-        result = sharpen_claim("Original claim here.", config)
-    assert result == ["Original claim here."]
+        result = normalize_claim("Original claim.", config)
+    assert result == "Original claim."
 
 
-def test_sharpen_falls_back_on_invalid_json(config: object) -> None:
-    from fact_checker.config import MergedConfig
-    assert isinstance(config, MergedConfig)
-    mock_resp = _mock_response("not valid json at all")
-    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
-        result = sharpen_claim("Original claim here.", config)
-    assert result == ["Original claim here."]
-
-
-def test_sharpen_falls_back_on_network_error(config: object) -> None:
+def test_normalize_falls_back_on_network_error(config: object) -> None:
     import httpx
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
-    with patch("fact_checker.sharpener.httpx.post", side_effect=httpx.TimeoutException("timeout")):
-        result = sharpen_claim("Original claim here.", config)
-    assert result == ["Original claim here."]
+    with patch("fact_checker.sharpener.httpx.post", side_effect=httpx.TimeoutException("t")):
+        result = normalize_claim("Original claim.", config)
+    assert result == "Original claim."
+
+
+def test_decompose_returns_list(config: object) -> None:
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    mock_resp = _mock_response('["Subclaim A.", "Subclaim B.", "Subclaim C."]')
+    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
+        result = decompose_claim("Some loaded claim.", config)
+    assert isinstance(result, list)
+    assert len(result) == 3
+
+
+def test_decompose_no_split_returns_single(config: object) -> None:
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    claim = "The Philippines had the highest inflation in SEA in 2023."
+    mock_resp = _mock_response('["The Philippines had the highest inflation in SEA in 2023."]')
+    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
+        result = decompose_claim(claim, config)
+    assert result == [claim]
+
+
+def test_decompose_caps_at_three(config: object) -> None:
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    mock_resp = _mock_response('["A.", "B.", "C.", "D.", "E."]')
+    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
+        result = decompose_claim("Something.", config)
+    assert len(result) <= 3
+
+
+def test_decompose_falls_back_on_invalid_json(config: object) -> None:
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    mock_resp = _mock_response("not valid json")
+    with patch("fact_checker.sharpener.httpx.post", return_value=mock_resp):
+        result = decompose_claim("Original claim.", config)
+    assert result == ["Original claim."]
+
+
+def test_process_claim_returns_list(config: object) -> None:
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    norm_resp = _mock_response("Normalized claim.")
+    decomp_resp = _mock_response('["Subclaim A.", "Subclaim B."]')
+    with patch("fact_checker.sharpener.httpx.post", side_effect=[norm_resp, decomp_resp]):
+        result = process_claim("Vague claim.", config)
+    assert isinstance(result, list)
+    assert len(result) == 2

@@ -49,7 +49,7 @@ async def test_agent_run_returns_pairs(config: object) -> None:
         patch("fact_checker.agent.SearchClient") as mock_search_cls,
         patch("fact_checker.agent.Verifier") as mock_verifier_cls,
         patch(
-            "fact_checker.agent.sharpen_claim",
+            "fact_checker.agent.process_claim",
             return_value=["The Earth orbits the Sun."],
         ),
         patch("fact_checker.agent.write_session") as mock_write,
@@ -84,7 +84,7 @@ async def test_agent_run_empty_text_returns_empty(config: object) -> None:
     with (
         patch("fact_checker.agent.SearchClient") as mock_search_cls,
         patch("fact_checker.agent.Verifier"),
-        patch("fact_checker.agent.sharpen_claim", return_value=[]),
+        patch("fact_checker.agent.process_claim", return_value=[]),
         patch("fact_checker.agent.write_session"),
     ):
         mock_search = AsyncMock()
@@ -95,3 +95,4 @@ async def test_agent_run_empty_text_returns_empty(config: object) -> None:
         pairs = await agent.run("")
 
     assert pairs == []
+

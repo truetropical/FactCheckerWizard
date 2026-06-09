@@ -10,7 +10,7 @@ from fact_checker.config import MergedConfig
 from fact_checker.extractor import extract_claims
 from fact_checker.persistence import write_session
 from fact_checker.search import SearchClient
-from fact_checker.sharpener import sharpen_claim
+from fact_checker.sharpener import process_claim
 from fact_checker.verifier import VerificationResult, Verifier
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ class Agent:
 
             # --- Sharpen into subclaims ---
             print("  Decomposing into subclaims...", file=sys.stderr, flush=True)
-            subclaims = sharpen_claim(claim, self._config)
+            subclaims = process_claim(claim, self._config)
             for j, sc in enumerate(subclaims, start=1):
                 print(f"  [{j}] {sc[:80]}", file=sys.stderr, flush=True)
 
@@ -139,3 +139,5 @@ class Agent:
         print(f"Session saved: {session_dir}", file=sys.stderr, flush=True)
 
         return pairs
+
+
