@@ -22,7 +22,10 @@ def test_extract_evidence_skips_empty_fields() -> None:
 
 
 def test_extract_evidence_caps_at_five() -> None:
-    results = [{"url": f"https://example.com/{i}", "content": f"Snippet {i}."} for i in range(10)]
+    results = [
+        {"url": f"https://example.com/{i}", "content": f"Snippet {i}."}
+        for i in range(10)
+    ]
     evidence = _extract_evidence(results)
     assert len(evidence) <= 10
 
@@ -45,7 +48,10 @@ async def test_agent_run_returns_pairs(config: object) -> None:
     with (
         patch("fact_checker.agent.SearchClient") as mock_search_cls,
         patch("fact_checker.agent.Verifier") as mock_verifier_cls,
-        patch("fact_checker.agent.sharpen_claim", return_value="The Earth orbits the Sun."),
+        patch(
+            "fact_checker.agent.sharpen_claim",
+            return_value=["The Earth orbits the Sun."],
+        ),
         patch("fact_checker.agent.write_session") as mock_write,
     ):
         mock_search = AsyncMock()
@@ -67,6 +73,7 @@ async def test_agent_run_returns_pairs(config: object) -> None:
     assert len(pairs) == 1
     assert isinstance(pairs[0], ClaimPair)
     assert pairs[0].original_result.verdict == "Supported"
+    assert len(pairs[0].subclaim_results) == 1
 
 
 @pytest.mark.asyncio
@@ -77,7 +84,7 @@ async def test_agent_run_empty_text_returns_empty(config: object) -> None:
     with (
         patch("fact_checker.agent.SearchClient") as mock_search_cls,
         patch("fact_checker.agent.Verifier"),
-        patch("fact_checker.agent.sharpen_claim", return_value=""),
+        patch("fact_checker.agent.sharpen_claim", return_value=[]),
         patch("fact_checker.agent.write_session"),
     ):
         mock_search = AsyncMock()

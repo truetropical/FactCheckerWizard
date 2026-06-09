@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 from fact_checker.config import MergedConfig
@@ -25,9 +26,9 @@ _EVIDENCE_RESULTS_PER_CLAIM: int = 5
 @dataclass
 class ClaimPair:
     original_claim: str
-    sharpened_claim: str
+    subclaims: list[str]
     original_result: VerificationResult
-    sharpened_result: VerificationResult
+    subclaim_results: list[VerificationResult] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -85,49 +86,52 @@ class Agent:
 
         for i, claim in enumerate(claims, start=1):
             print(
-                f"\nClaim {i} of {len(claims)}: {claim[:80]}...",
+                f"\nClaim {i} of {len(claims)}: {claim[:80]}",
                 file=sys.stderr, flush=True,
             )
 
-            # Sharpen
-            print("  Sharpening claim...", file=sys.stderr, flush=True)
-            sharpened = sharpen_claim(claim, self._config)
-            if sharpened != claim:
-                print(f"  Sharpened: {sharpened[:80]}", file=sys.stderr, flush=True)
-            else:
-                print("  Claim unchanged (already precise or unfalsifiable).",
-                      file=sys.stderr, flush=True)
+            # --- Sharpen into subclaims ---
+            print("  Decomposing into subclaims...", file=sys.stderr, flush=True)
+            subclaims = sharpen_claim(claim, self._config)
+            for j, sc in enumerate(subclaims, start=1):
+                print(f"  [{j}] {sc[:80]}", file=sys.stderr, flush=True)
 
-            # Search + verify original
-            print("  Verifying original...", file=sys.stderr, flush=True)
+            # --- Verify original ---
+            print("  Verifying original claim...", file=sys.stderr, flush=True)
             orig_results = await self._search.search(claim)
             orig_evidence = _extract_evidence(orig_results)
             original_result = self._verifier.verify_claim(claim, orig_evidence)
             print(
-                f"  Original  : {original_result.verdict} "
+                f"  Original: {original_result.verdict} "
                 f"({original_result.confidence:.0%})",
                 file=sys.stderr, flush=True,
             )
 
-            # Search + verify sharpened
-            print("  Verifying sharpened...", file=sys.stderr, flush=True)
-            if sharpened != claim:
-                sharp_results = await self._search.search(sharpened)
-                sharp_evidence = _extract_evidence(sharp_results)
-            else:
-                sharp_evidence = orig_evidence
-            sharpened_result = self._verifier.verify_claim(sharpened, sharp_evidence)
-            print(
-                f"  Sharpened : {sharpened_result.verdict} "
-                f"({sharpened_result.confidence:.0%})",
-                file=sys.stderr, flush=True,
-            )
+            # --- Verify each subclaim ---
+            subclaim_results: list[VerificationResult] = []
+            for j, subclaim in enumerate(subclaims, start=1):
+                print(
+                    f"  Subclaim {j}/{len(subclaims)}: verifying...",
+                    file=sys.stderr, flush=True,
+                )
+                if subclaim == claim:
+                    sc_evidence = orig_evidence
+                else:
+                    sc_results = await self._search.search(subclaim)
+                    sc_evidence = _extract_evidence(sc_results)
+                sc_result = self._verifier.verify_claim(subclaim, sc_evidence)
+                subclaim_results.append(sc_result)
+                print(
+                    f"  Subclaim {j}: {sc_result.verdict} "
+                    f"({sc_result.confidence:.0%})",
+                    file=sys.stderr, flush=True,
+                )
 
             pairs.append(ClaimPair(
                 original_claim=claim,
-                sharpened_claim=sharpened,
+                subclaims=subclaims,
                 original_result=original_result,
-                sharpened_result=sharpened_result,
+                subclaim_results=subclaim_results,
             ))
 
         print("\nWriting session report...", file=sys.stderr, flush=True)

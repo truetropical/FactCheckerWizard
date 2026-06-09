@@ -6,12 +6,12 @@ from pathlib import Path
 import pytest
 
 from fact_checker.agent import ClaimPair
-from fact_checker.persistence import write_session
+from fact_checker.persistence import write_session, render_console_report
 from fact_checker.verifier import VerificationResult
 
 
-def _make_pair(claim: str, verdict: str = "Supported") -> ClaimPair:
-    result = VerificationResult(
+def _make_result(claim: str, verdict: str = "Supported") -> VerificationResult:
+    return VerificationResult(
         claim=claim,
         verdict=verdict,  # type: ignore[arg-type]
         confidence=0.95,
@@ -20,18 +20,20 @@ def _make_pair(claim: str, verdict: str = "Supported") -> ClaimPair:
         grounding_used=False,
         error=None,
     )
+
+
+def _make_pair(original: str, subclaims: list[str] | None = None) -> ClaimPair:
+    if subclaims is None:
+        subclaims = [original]
     return ClaimPair(
-        original_claim=claim,
-        sharpened_claim=claim + " (sharpened)",
-        original_result=result,
-        sharpened_result=result,
+        original_claim=original,
+        subclaims=subclaims,
+        original_result=_make_result(original),
+        subclaim_results=[_make_result(sc) for sc in subclaims],
     )
 
 
-def test_write_session_creates_directory(
-    config: object,
-    tmp_path: Path,
-) -> None:
+def test_write_session_creates_directory(config: object) -> None:
     from fact_checker.config import MergedConfig
     assert isinstance(config, MergedConfig)
     pair = _make_pair("The Eiffel Tower is in Paris, France.")
@@ -82,3 +84,19 @@ def test_write_session_empty_results(config: object) -> None:
     json_file = session_dir / "session.json"
     data = json.loads(json_file.read_text(encoding="utf-8"))
     assert data == []
+
+
+def test_render_console_shows_subclaims(config: object) -> None:
+    from fact_checker.config import MergedConfig
+    assert isinstance(config, MergedConfig)
+    pair = _make_pair(
+        "X is corrupt.",
+        subclaims=[
+            "X has engaged in illegal conduct for personal gain.",
+            "X has been formally investigated for corruption.",
+        ],
+    )
+    report = render_console_report([pair])
+    assert "ORIGINAL CLAIM" in report
+    assert "SUBCLAIM 1" in report
+    assert "SUBCLAIM 2" in report

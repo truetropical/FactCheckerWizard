@@ -14,15 +14,21 @@ from fact_checker.persistence import render_console_report
 def _pair_to_dict(p: ClaimPair) -> dict[str, object]:
     return {
         "original_claim": p.original_claim,
-        "sharpened_claim": p.sharpened_claim,
+        "subclaims": p.subclaims,
         "original_verdict": p.original_result.verdict,
         "original_confidence": p.original_result.confidence,
         "original_reasoning": p.original_result.reasoning,
         "original_sources": p.original_result.sources,
-        "sharpened_verdict": p.sharpened_result.verdict,
-        "sharpened_confidence": p.sharpened_result.confidence,
-        "sharpened_reasoning": p.sharpened_result.reasoning,
-        "sharpened_sources": p.sharpened_result.sources,
+        "subclaim_results": [
+            {
+                "claim": r.claim,
+                "verdict": r.verdict,
+                "confidence": r.confidence,
+                "reasoning": r.reasoning,
+                "sources": r.sources,
+            }
+            for r in p.subclaim_results
+        ],
     }
 
 

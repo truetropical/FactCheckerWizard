@@ -22,16 +22,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _verdict_emoji(verdict: str) -> str:
-    match verdict:
-        case "Supported":
-            return "Supported"
-        case "Refuted":
-            return "Refuted"
-        case _:
-            return "Inconclusive"
-
-
 def _result_to_dict(result: VerificationResult) -> dict[str, object]:
     return dataclasses.asdict(result)
 
@@ -53,12 +43,11 @@ def render_console_report(pairs: list[ClaimPair]) -> str:
 
     for i, pair in enumerate(pairs, start=1):
         r_orig = pair.original_result
-        r_sharp = pair.sharpened_result
-        same_claim = pair.original_claim == pair.sharpened_claim
-
         section: list[str] = []
         section.append(f"\nCLAIM {i} OF {len(pairs)}")
         section.append("")
+
+        # --- Original ---
         section.append("ORIGINAL CLAIM:")
         section.append(f"  {pair.original_claim}")
         section.append("")
@@ -72,23 +61,32 @@ def render_console_report(pairs: list[ClaimPair]) -> str:
         if r_orig.error:
             section.append(f"  Error: {r_orig.error}")
 
-        section.append("")
-
-        if same_claim:
-            section.append("SHARPENED CLAIM: (unchanged - already precise or unfalsifiable)")
-        else:
-            section.append("SHARPENED CLAIM:")
-            section.append(f"  {pair.sharpened_claim}")
-            section.append("")
-            section.append(f"  Verdict:    {r_sharp.verdict}")
-            section.append(f"  Confidence: {r_sharp.confidence:.0%}")
-            section.append(f"  Reasoning:  {r_sharp.reasoning}")
-            if r_sharp.sources:
-                section.append("  Sources:")
-                for url in r_sharp.sources:
-                    section.append(f"    - {url}")
-            if r_sharp.error:
-                section.append(f"  Error: {r_sharp.error}")
+        # --- Subclaims ---
+        if pair.subclaim_results:
+            single = (
+                len(pair.subclaims) == 1
+                and pair.subclaims[0] == pair.original_claim
+            )
+            if single:
+                section.append("")
+                section.append("SUBCLAIMS: (claim was already precise - no decomposition needed)")
+            else:
+                for j, (sc, sc_result) in enumerate(
+                    zip(pair.subclaims, pair.subclaim_results), start=1
+                ):
+                    section.append("")
+                    section.append(f"SUBCLAIM {j}:")
+                    section.append(f"  {sc}")
+                    section.append("")
+                    section.append(f"  Verdict:    {sc_result.verdict}")
+                    section.append(f"  Confidence: {sc_result.confidence:.0%}")
+                    section.append(f"  Reasoning:  {sc_result.reasoning}")
+                    if sc_result.sources:
+                        section.append("  Sources:")
+                        for url in sc_result.sources:
+                            section.append(f"    - {url}")
+                    if sc_result.error:
+                        section.append(f"  Error: {sc_result.error}")
 
         section.append("\n" + "-" * 70)
         sections.append("\n".join(section))
@@ -113,9 +111,6 @@ def _render_markdown(pairs: list[ClaimPair]) -> str:
 
     for i, pair in enumerate(pairs, start=1):
         r_orig = pair.original_result
-        r_sharp = pair.sharpened_result
-        same_claim = pair.original_claim == pair.sharpened_claim
-
         lines += [f"## Claim {i}", ""]
         lines += [
             "### Original Claim",
@@ -134,25 +129,34 @@ def _render_markdown(pairs: list[ClaimPair]) -> str:
                 lines.append(f"- {url}")
             lines.append("")
 
-        if same_claim:
-            lines += ["### Sharpened Claim", "", "*(unchanged - already precise)*", ""]
+        single = (
+            len(pair.subclaims) == 1
+            and pair.subclaims[0] == pair.original_claim
+        )
+        if single:
+            lines += ["### Subclaims", "", "*(already precise - no decomposition needed)*", ""]
         else:
-            lines += [
-                "### Sharpened Claim",
-                "",
-                f"> {pair.sharpened_claim}",
-                "",
-                f"**Verdict:** {r_sharp.verdict}  ",
-                f"**Confidence:** {r_sharp.confidence:.0%}  ",
-                "",
-                f"**Reasoning:** {r_sharp.reasoning}",
-                "",
-            ]
-            if r_sharp.sources:
-                lines.append("**Sources:**")
-                for url in r_sharp.sources:
-                    lines.append(f"- {url}")
-                lines.append("")
+            lines.append("### Subclaims")
+            lines.append("")
+            for j, (sc, sc_result) in enumerate(
+                zip(pair.subclaims, pair.subclaim_results), start=1
+            ):
+                lines += [
+                    f"#### Subclaim {j}",
+                    "",
+                    f"> {sc}",
+                    "",
+                    f"**Verdict:** {sc_result.verdict}  ",
+                    f"**Confidence:** {sc_result.confidence:.0%}  ",
+                    "",
+                    f"**Reasoning:** {sc_result.reasoning}",
+                    "",
+                ]
+                if sc_result.sources:
+                    lines.append("**Sources:**")
+                    for url in sc_result.sources:
+                        lines.append(f"- {url}")
+                    lines.append("")
 
         lines += ["---", ""]
 
@@ -177,9 +181,9 @@ def write_session(
     payload = [
         {
             "original_claim": p.original_claim,
-            "sharpened_claim": p.sharpened_claim,
+            "subclaims": p.subclaims,
             "original_result": _result_to_dict(p.original_result),
-            "sharpened_result": _result_to_dict(p.sharpened_result),
+            "subclaim_results": [_result_to_dict(r) for r in p.subclaim_results],
         }
         for p in pairs
     ]
