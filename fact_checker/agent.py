@@ -9,6 +9,7 @@ from pathlib import Path
 from fact_checker.config import MergedConfig
 from fact_checker.extractor import extract_claims
 from fact_checker.persistence import write_session
+from fact_checker.screener import screen_claims
 from fact_checker.search import SearchClient
 from fact_checker.sharpener import process_claim
 from fact_checker.verifier import VerificationResult, Verifier
@@ -16,6 +17,7 @@ from fact_checker.verifier import VerificationResult, Verifier
 logger = logging.getLogger(__name__)
 
 _EVIDENCE_RESULTS_PER_CLAIM: int = 5
+_EXTRACTOR_SENTENCE_CAP: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -62,30 +64,49 @@ class Agent:
         self._verifier = Verifier(config)
 
     async def run(self, text: str) -> list[ClaimPair]:
-        """Run the full pipeline: extract, normalize, search, verify, persist.
+        """Run the full pipeline: extract, screen, normalize, search, verify, persist.
 
-        When process_claim returns 1 item, it is used as a refined search
-        query for the original claim but no subclaims are displayed.
-        When process_claim returns 2-3 items, each is verified independently
-        and shown as subclaims.
+        Pipeline:
+        1. Extract all sentences (cap at 30)
+        2. Screen: one Groq call selects top 5 atomic verifiable claims
+        3. For each claim: normalize query, search, verify
+        4. Decomposition is skipped - screener selects atomic claims only
+        5. Persist and return
 
         Args:
-            text: Raw input text containing one or more factual claims.
+            text: Raw input text of any length.
 
         Returns:
-            List of ClaimPair objects, one per extracted claim.
+            List of ClaimPair objects, one per verified claim.
         """
         print("Initialising search...", file=sys.stderr, flush=True)
         await self._search.initialise()
 
-        print("Extracting claims...", file=sys.stderr, flush=True)
-        claims = extract_claims(text)
+        # --- Stage 1: Extract sentences ---
+        print("Extracting sentences...", file=sys.stderr, flush=True)
+        all_sentences = extract_claims(text)
 
-        if not claims:
+        if not all_sentences:
             print("No verifiable claims found in input.", file=sys.stderr, flush=True)
             return []
 
-        print(f"Found {len(claims)} claim(s) to verify.", file=sys.stderr, flush=True)
+        print(
+            f"Extracted {len(all_sentences)} sentence(s).",
+            file=sys.stderr, flush=True,
+        )
+
+        # --- Stage 2: Screen for top 5 atomic claims ---
+        print("Screening for top fact-checkable claims...", file=sys.stderr, flush=True)
+        claims = screen_claims(all_sentences, self._config)
+
+        if not claims:
+            print("No fact-checkable claims found after screening.", file=sys.stderr, flush=True)
+            return []
+
+        print(
+            f"Selected {len(claims)} claim(s) for verification.",
+            file=sys.stderr, flush=True,
+        )
 
         pairs: list[ClaimPair] = []
 
@@ -95,64 +116,47 @@ class Agent:
                 file=sys.stderr, flush=True,
             )
 
-            # --- Normalize and optionally decompose ---
-            print("  Processing claim...", file=sys.stderr, flush=True)
+            # --- Stage 3: Normalize (no decomposition) ---
+            print("  Normalizing...", file=sys.stderr, flush=True)
             processed = process_claim(claim, self._config)
-            needs_decomposition = len(processed) > 1
 
-            if needs_decomposition:
-                print(
-                    f"  Decomposed into {len(processed)} subclaims:",
-                    file=sys.stderr, flush=True,
+            # Screener selected atomic claims so decomposition should not trigger.
+            # If it does anyway, skip subclaims and use only the first item.
+            if len(processed) > 1:
+                logger.warning(
+                    "Decomposition triggered on screened claim %r - skipping subclaims",
+                    claim,
                 )
-                for j, sc in enumerate(processed, start=1):
-                    print(f"    [{j}] {sc[:80]}", file=sys.stderr, flush=True)
+                search_query = processed[0]
             else:
                 search_query = processed[0]
-                if search_query != claim:
-                    print(
-                        f"  Normalized search query: {search_query[:80]}",
-                        file=sys.stderr, flush=True,
-                    )
-                else:
-                    print("  Claim is already precise.", file=sys.stderr, flush=True)
 
-            # --- Verify original claim ---
-            # Use normalized query for search but display original claim text
+            if search_query != claim:
+                print(
+                    f"  Normalized: {search_query[:80]}",
+                    file=sys.stderr, flush=True,
+                )
+            else:
+                print("  Claim is already precise.", file=sys.stderr, flush=True)
+
+            # --- Stage 4: Search + verify ---
+            print("  Searching for evidence...", file=sys.stderr, flush=True)
+            search_results = await self._search.search(search_query)
+            evidence = _extract_evidence(search_results)
+
             print("  Verifying...", file=sys.stderr, flush=True)
-            search_query = processed[0] if not needs_decomposition else claim
-            orig_results = await self._search.search(search_query)
-            orig_evidence = _extract_evidence(orig_results)
-            original_result = self._verifier.verify_claim(claim, orig_evidence)
+            result = self._verifier.verify_claim(claim, evidence)
             print(
-                f"  Result: {original_result.verdict} "
-                f"({original_result.confidence:.0%})",
+                f"  Result: {result.verdict} ({result.confidence:.0%})",
                 file=sys.stderr, flush=True,
             )
 
-            # --- Verify subclaims only when decomposition produced 2+ items ---
-            subclaim_results: list[VerificationResult] = []
-            if needs_decomposition:
-                for j, subclaim in enumerate(processed, start=1):
-                    print(
-                        f"  Subclaim {j}/{len(processed)}: verifying...",
-                        file=sys.stderr, flush=True,
-                    )
-                    sc_results = await self._search.search(subclaim)
-                    sc_evidence = _extract_evidence(sc_results)
-                    sc_result = self._verifier.verify_claim(subclaim, sc_evidence)
-                    subclaim_results.append(sc_result)
-                    print(
-                        f"  Subclaim {j}: {sc_result.verdict} "
-                        f"({sc_result.confidence:.0%})",
-                        file=sys.stderr, flush=True,
-                    )
-
+            # No subclaims - screener ensures atomic claims
             pairs.append(ClaimPair(
                 original_claim=claim,
-                subclaims=processed if needs_decomposition else [],
-                original_result=original_result,
-                subclaim_results=subclaim_results,
+                subclaims=[],
+                original_result=result,
+                subclaim_results=[],
             ))
 
         print("\nWriting session report...", file=sys.stderr, flush=True)

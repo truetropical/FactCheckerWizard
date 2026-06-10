@@ -64,3 +64,4 @@ def extract_claims(text: str) -> list[str]:
 
     logger.info("Extracted %d claim(s)", len(claims))
     return claims
+
