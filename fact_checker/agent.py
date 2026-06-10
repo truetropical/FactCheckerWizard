@@ -9,6 +9,7 @@ from pathlib import Path
 from fact_checker.config import MergedConfig
 from fact_checker.extractor import extract_claims
 from fact_checker.persistence import write_session
+from fact_checker.resolver import resolve_references
 from fact_checker.screener import screen_claims
 from fact_checker.search import SearchClient
 from fact_checker.sharpener import process_claim
@@ -17,7 +18,6 @@ from fact_checker.verifier import VerificationResult, Verifier
 logger = logging.getLogger(__name__)
 
 _EVIDENCE_RESULTS_PER_CLAIM: int = 5
-_EXTRACTOR_SENTENCE_CAP: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -64,14 +64,15 @@ class Agent:
         self._verifier = Verifier(config)
 
     async def run(self, text: str) -> list[ClaimPair]:
-        """Run the full pipeline: extract, screen, normalize, search, verify, persist.
+        """Run the full pipeline: extract, screen, resolve, normalize, search, verify, persist.
 
         Pipeline:
-        1. Extract all sentences (cap at 30)
+        1. Extract all sentences (cap at 100)
         2. Screen: one Groq call selects top 5 atomic verifiable claims
-        3. For each claim: normalize query, search, verify
-        4. Decomposition is skipped - screener selects atomic claims only
-        5. Persist and return
+        3. Resolve: one Groq call substitutes ambiguous references using source context
+        4. For each claim: normalize query, search, verify
+        5. Decomposition is skipped - screener selects atomic claims only
+        6. Persist and return
 
         Args:
             text: Raw input text of any length.
@@ -97,16 +98,20 @@ class Agent:
 
         # --- Stage 2: Screen for top 5 atomic claims ---
         print("Screening for top fact-checkable claims...", file=sys.stderr, flush=True)
-        claims = screen_claims(all_sentences, self._config)
+        screened = screen_claims(all_sentences, self._config)
 
-        if not claims:
+        if not screened:
             print("No fact-checkable claims found after screening.", file=sys.stderr, flush=True)
             return []
 
         print(
-            f"Selected {len(claims)} claim(s) for verification.",
+            f"Selected {len(screened)} claim(s) for verification.",
             file=sys.stderr, flush=True,
         )
+
+        # --- Stage 3: Resolve ambiguous references ---
+        print("Resolving references...", file=sys.stderr, flush=True)
+        claims = resolve_references(text, screened, self._config)
 
         pairs: list[ClaimPair] = []
 
@@ -116,7 +121,7 @@ class Agent:
                 file=sys.stderr, flush=True,
             )
 
-            # --- Stage 3: Normalize (no decomposition) ---
+            # --- Stage 4: Normalize (no decomposition) ---
             print("  Normalizing...", file=sys.stderr, flush=True)
             processed = process_claim(claim, self._config)
 
@@ -127,9 +132,7 @@ class Agent:
                     "Decomposition triggered on screened claim %r - skipping subclaims",
                     claim,
                 )
-                search_query = processed[0]
-            else:
-                search_query = processed[0]
+            search_query = processed[0]
 
             if search_query != claim:
                 print(
@@ -139,7 +142,7 @@ class Agent:
             else:
                 print("  Claim is already precise.", file=sys.stderr, flush=True)
 
-            # --- Stage 4: Search + verify ---
+            # --- Stage 5: Search + verify ---
             print("  Searching for evidence...", file=sys.stderr, flush=True)
             search_results = await self._search.search(search_query)
             evidence = _extract_evidence(search_results)
