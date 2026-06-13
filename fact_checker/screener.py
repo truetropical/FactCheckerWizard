@@ -182,6 +182,8 @@ def screen_claims(
 
     pass2_results = _groq_call(pass2_prompt, pass2_message, config)
     pass2_results = pass2_results[:slots_needed]
+    pass2_results = [s for s in pass2_results if not _is_opinion_phrase(s)]
+    pass2_results = [s for s in pass2_results if not _needs_geographic_qualifier(s)]
 
     logger.info(
         "Screener Pass 2: %d additional claim(s) found",

@@ -82,6 +82,7 @@ VERDICT RULES:
   or insufficient credible evidence exists — confidence must be 0.3 or lower
 - Never express personal opinion
 - Never cite Tier C sources as supporting evidence
+- When verdict is REFUTED, the REASONING must explicitly state the correct fact, figure, or finding that contradicts the claim (e.g. the actual number, date, or documented reality)
 
 Respond in this exact format:
 VERDICT: <Supported|Refuted|Inconclusive>
