@@ -9,7 +9,7 @@ from fact_checker.config import GROQ_API_URL, MergedConfig
 
 logger = logging.getLogger(__name__)
 
-_PASS1_PROMPT = 'You are a fact-checking claim screener.\nYou receive a numbered list of sentences extracted from a text.\nSelect sentences that are ALREADY self-contained and independently verifiable WITHOUT needing any surrounding context.\n\nA sentence qualifies ONLY if ALL of these are true:\n1. It makes a specific, falsifiable factual assertion\n2. It can be verified independently using public sources AS WRITTEN\n3. It is a single atomic claim - not a compound of multiple facts\n4. It contains concrete specifics: names, numbers, dates, places, or documented events\n5. It is not opinion, commentary, transition, background, or context\n6. It has a clear, named subject - not a pronoun or vague noun like \'the country\', \'the government\', \'the fund\', \'he\', \'it\', \'they\'\n\nREJECT:\n- Opinions (many believe, critics say, experts think)\n- Vague assertions (the economy is struggling, things are getting worse)\n- Sentences with unnamed or ambiguous subjects\n- Transitions and connectors\n- Background or context sentences\n- Compound claims (contains two independent facts joined by a comma or \'and\')\n\nPRIORITY ORDER:\n1. Most specific and measurable (statistics, percentages, named events with dates)\n2. Most likely to be disputed or misinformation\n3. Most significant impact if false\n\nReturn up to 5 qualifying sentences in priority order.\nIf fewer than 5 qualify, return only those that qualify.\nIf none qualify, return an empty array.\n\nOUTPUT FORMAT - return ONLY a JSON array of strings, no preamble:\n["sentence one", "sentence two"]\n\nCopy sentences EXACTLY as they appear. Do not rewrite them.'
+_PASS1_PROMPT = 'You are a fact-checking claim screener.\nYou receive a numbered list of sentences extracted from a text.\nSelect sentences that are ALREADY self-contained and independently verifiable WITHOUT needing any surrounding context.\n\nA sentence qualifies ONLY if ALL of these are true:\n1. It makes a specific, falsifiable factual assertion\n2. It can be verified independently using public sources AS WRITTEN\n3. It is a single atomic claim - not a compound of multiple facts\n4. It contains concrete specifics: names, numbers, dates, places, or documented events\n5. It is not opinion, commentary, transition, background, or context\n6. It has a clear, named subject - not a pronoun or vague noun like \'the country\', \'the government\', \'the fund\', \'he\', \'it\', \'they\'\n7. If the subject is a general economic or statistical concept (inflation, GDP, unemployment, growth, debt, exports, population) it MUST include a geographic or entity qualifier (e.g. Philippine inflation, US GDP) - reject if the qualifier is missing\n\nREJECT:\n- Opinions (many believe, critics say, experts think)\n- Vague assertions (the economy is struggling, things are getting worse)\n- Sentences with unnamed or ambiguous subjects\n- Transitions and connectors\n- Background or context sentences\n- Compound claims (contains two independent facts joined by a comma or \'and\')\n\nPRIORITY ORDER:\n1. Most specific and measurable (statistics, percentages, named events with dates)\n2. Most likely to be disputed or misinformation\n3. Most significant impact if false\n\nReturn up to 5 qualifying sentences in priority order.\nIf fewer than 5 qualify, return only those that qualify.\nIf none qualify, return an empty array.\n\nOUTPUT FORMAT - return ONLY a JSON array of strings, no preamble:\n["sentence one", "sentence two"]\n\nCopy sentences EXACTLY as they appear. Do not rewrite them.'
 _PASS2_PROMPT = 'You are a fact-checking claim screener.\nPass 1 screening found fewer than 5 self-contained verifiable claims.\nYou now receive the FULL SOURCE TEXT and a list of REMAINING sentences that were not selected in Pass 1.\n\nYour task: identify sentences that WOULD be verifiable if their missing subject were inferred from the source text, and rewrite them with the correct subject added.\n\nA sentence qualifies for Pass 2 ONLY if:\n1. It contains a specific measurable fact (number, percentage, date, named event)\n2. Its subject can be unambiguously identified from the source text\n3. Once rewritten with the correct subject, it becomes independently verifiable\n4. It is not opinion, commentary, or transition\n\nREWRITING RULES:\n- Replace vague subjects (the country, it, they, the government, the fund) with the specific named entity from the source text\n- Do not add any other information\n- Do not change numbers, percentages, or dates\n- Keep the rewrite as close to the original as possible\n\nReturn ONLY the sentences needed to reach a total of SLOTS_NEEDED more claims.\nIf none qualify, return an empty array.\n\nOUTPUT FORMAT - return ONLY a JSON array of rewritten strings, no preamble:\n["rewritten sentence one", "rewritten sentence two"]'
 
 _MAX_CLAIMS: int = 5
@@ -106,6 +106,32 @@ def screen_claims(
 
     pass1_results = _groq_call(_PASS1_PROMPT, pass1_message, config)
     pass1_results = pass1_results[:_MAX_CLAIMS]
+
+    # Post-filter: remove claims where subject is an unqualified economic concept.
+    # These need geographic context and should fall through to Pass 2 for rewriting.
+    _UNQUALIFIED_SUBJECTS = (
+        "inflation", "gdp", "unemployment", "growth", "debt",
+        "exports", "imports", "deficit", "surplus", "revenue",
+        "spending", "interest rate", "exchange rate",
+    )
+
+    def _needs_geographic_qualifier(sentence: str) -> bool:
+        """Return True if sentence starts with an unqualified economic concept."""
+        lower = sentence.strip().lower()
+        for concept in _UNQUALIFIED_SUBJECTS:
+            if lower.startswith(concept + " ") or lower.startswith(concept + ","):
+                return True
+        return False
+
+    filtered_pass1 = [s for s in pass1_results if not _needs_geographic_qualifier(s)]
+    removed = [s for s in pass1_results if _needs_geographic_qualifier(s)]
+    if removed:
+        logger.info(
+            "Screener Pass 1 post-filter: removed %d unqualified economic claim(s): %s",
+            len(removed),
+            removed,
+        )
+    pass1_results = filtered_pass1
 
     logger.info(
         "Screener Pass 1: %d sentences -> %d self-contained claim(s)",

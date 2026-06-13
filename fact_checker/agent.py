@@ -98,7 +98,7 @@ class Agent:
 
         # --- Stage 2: Screen for top 5 atomic claims ---
         print("Screening for top fact-checkable claims...", file=sys.stderr, flush=True)
-        screened = screen_claims(all_sentences, self._config)
+        screened = screen_claims(all_sentences, self._config, source_text=text)
 
         if not screened:
             print("No fact-checkable claims found after screening.", file=sys.stderr, flush=True)
@@ -167,4 +167,5 @@ class Agent:
         print(f"Session saved: {session_dir}", file=sys.stderr, flush=True)
 
         return pairs
+
 
