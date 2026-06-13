@@ -83,6 +83,7 @@ VERDICT RULES:
 - Never express personal opinion
 - Never cite Tier C sources as supporting evidence
 - When verdict is REFUTED, the REASONING must explicitly state the correct fact, figure, or finding that contradicts the claim (e.g. the actual number, date, or documented reality)
+- Do NOT include URLs or source links in the REASONING field - refer to sources by name only (e.g. "the Philippine Statistics Authority" not the URL)
 
 Respond in this exact format:
 VERDICT: <Supported|Refuted|Inconclusive>
