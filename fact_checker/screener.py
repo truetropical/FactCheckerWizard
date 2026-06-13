@@ -109,6 +109,20 @@ def screen_claims(
 
     # Post-filter: remove claims where subject is an unqualified economic concept.
     # These need geographic context and should fall through to Pass 2 for rewriting.
+    _OPINION_PHRASES = (
+        "doing its best", "doing their best", "working hard", "committed to",
+        "striving to", "trying to", "aims to", "seeking to", "hoping to",
+        "believes that", "many believe", "experts say", "critics say",
+        "most people", "many people", "some people", "it is believed",
+    )
+
+    def _is_opinion_phrase(sentence: str) -> bool:
+        """Return True if sentence contains an opinion or effort phrase."""
+        lower = sentence.strip().lower()
+        return any(phrase in lower for phrase in _OPINION_PHRASES)
+
+    pass1_results = [s for s in pass1_results if not _is_opinion_phrase(s)]
+
     _UNQUALIFIED_SUBJECTS = (
         "inflation", "gdp", "unemployment", "growth", "debt",
         "exports", "imports", "deficit", "surplus", "revenue",
