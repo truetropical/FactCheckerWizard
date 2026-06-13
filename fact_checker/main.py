@@ -48,6 +48,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output", choices=["json", "report", "file"], default="report",
         help="report: human-readable (default). json: structured JSON. file: session path only.",
     )
+    parser.add_argument(
+        "--no-screen", action="store_true", default=False,
+        help="Skip screener and resolver stages. Use for single precise claims.",
+    )
     return parser
 
 
@@ -65,7 +69,7 @@ async def _load_text(args: argparse.Namespace) -> str:
         with open(args.file, encoding="utf-8") as fh:
             return fh.read()
     except OSError as exc:
-        print(f"Error reading file '{args.file}': {exc}", file=sys.stderr)
+        print(f"Error reading file \'{args.file}\': {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -78,7 +82,8 @@ async def _async_main(args: argparse.Namespace) -> None:
 
     text = await _load_text(args)
     agent = Agent(config)
-    pairs = await agent.run(text)
+    screen = not args.no_screen
+    pairs = await agent.run(text, screen=screen)
 
     match args.output:
         case "report":

@@ -192,7 +192,12 @@ def _choice_paste() -> None:
         print("[!] No text entered.")
         _pause()
         return
-    _run_checker(["--claim", text, "--output", "report"])
+    # Auto-detect single claim to skip screener
+    sentences = [s.strip() for s in text.replace("?", ".").replace("!", ".").split(".") if len(s.strip()) > 20]
+    if len(sentences) <= 1:
+        _run_checker(["--claim", text, "--output", "report", "--no-screen"])
+    else:
+        _run_checker(["--claim", text, "--output", "report"])
     _pause()
 
 
