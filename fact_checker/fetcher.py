@@ -4,43 +4,24 @@ import logging
 import re
 
 import httpx
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-_FETCH_TIMEOUT: float = 15.0
-_MAX_TEXT_LENGTH: int = 8000  # chars — keeps Groq prompt within token limits
-
-# Tags whose contents are never useful for fact-checking
-_STRIP_TAGS: list[str] = [
-    "script", "style", "noscript", "nav", "footer", "header",
-    "aside", "form", "button", "iframe", "img", "svg",
-]
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
+_JINA_BASE_URL: str = 'https://r.jina.ai/'
+_FETCH_TIMEOUT: float = 30.0
+_MAX_TEXT_LENGTH: int = 8000
 
 
 class FetchError(Exception):
     """Raised when a URL cannot be fetched or parsed."""
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 async def fetch_url_text(url: str) -> str:
-    """Fetch a URL and return its main readable text content.
+    """Fetch a URL and return its main readable text content via Jina Reader.
 
-    Strips HTML tags, navigation, scripts, and other noise. Truncates to
-    _MAX_TEXT_LENGTH characters to keep downstream prompts manageable.
+    Jina Reader (r.jina.ai) handles JavaScript rendering, bot detection,
+    paywalls, and returns clean text from any public URL.
+    No API key required.
 
     Args:
         url: The URL to fetch. Must be http or https.
@@ -51,66 +32,46 @@ async def fetch_url_text(url: str) -> str:
     Raises:
         FetchError: If the request fails or no text can be extracted.
     """
-    if not url.startswith(("http://", "https://")):
-        raise FetchError(f"Invalid URL scheme — only http/https supported: {url!r}")
+    if not url.startswith(('http://', 'https://')):
+        raise FetchError(f'Invalid URL scheme - only http/https supported: {url!r}')
 
-    logger.info("Fetching URL: %s", url)
+    jina_url = f'{_JINA_BASE_URL}{url}'
+    logger.info('Fetching via Jina Reader: %s', url)
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                url,
+                jina_url,
                 timeout=httpx.Timeout(_FETCH_TIMEOUT),
                 follow_redirects=True,
                 headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/125.0.0.0 Safari/537.36"
-                    )
+                    'Accept': 'text/plain',
+                    'X-Return-Format': 'text',
                 },
             )
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise FetchError(f"HTTP error fetching {url}: {exc}") from exc
+        raise FetchError(f'Jina Reader HTTP error for {url}: {exc}') from exc
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
-        raise FetchError(f"Network error fetching {url}: {exc}") from exc
+        raise FetchError(f'Jina Reader network error for {url}: {exc}') from exc
 
-    content_type = response.headers.get("content-type", "")
-    if "text/html" not in content_type and "text/plain" not in content_type:
-        raise FetchError(
-            f"Unsupported content type {content_type!r} for URL: {url}"
-        )
+    raw_text = response.text.strip()
 
-    try:
-        soup = BeautifulSoup(response.text, "html.parser")
-    except Exception as exc:
-        raise FetchError(f"Failed to parse HTML from {url}: {exc}") from exc
+    if not raw_text:
+        raise FetchError(f'Jina Reader returned empty content for URL: {url}')
 
-    # Remove noise tags in-place
-    for tag in soup(list(_STRIP_TAGS)):
-        tag.decompose()
-
-    # Prefer <article> or <main> if present — better signal-to-noise
-    body = soup.find("article") or soup.find("main") or soup.body or soup
-
-    raw_text = body.get_text(separator=" ", strip=True)
-
-    # Collapse whitespace
-    cleaned = re.sub(r"\s+", " ", raw_text).strip()
-
-    if not cleaned:
-        raise FetchError(f"No readable text found at URL: {url}")
+    cleaned = raw_text
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
 
     if len(cleaned) > _MAX_TEXT_LENGTH:
         logger.warning(
-            "Page text truncated from %d to %d chars for URL: %s",
+            'Page text truncated from %d to %d chars for URL: %s',
             len(cleaned),
             _MAX_TEXT_LENGTH,
             url,
         )
         cleaned = cleaned[:_MAX_TEXT_LENGTH]
 
-    logger.info("Extracted %d chars from %s", len(cleaned), url)
+    logger.info('Extracted %d chars from %s via Jina Reader', len(cleaned), url)
     return cleaned
-
